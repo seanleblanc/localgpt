@@ -88,12 +88,16 @@ pub trait LLMProvider: Send + Sync {
 }
 
 pub fn create_provider(model: &str, config: &Config) -> Result<Box<dyn LLMProvider>> {
+    let workspace = config.workspace_path();
+
     // Claude CLI: prefix "claude-cli/"
     if model.starts_with("claude-cli/") {
         let model_name = model.strip_prefix("claude-cli/").unwrap_or("opus");
         let cli_config = config.providers.claude_cli.as_ref();
         let command = cli_config.map(|c| c.command.as_str()).unwrap_or("claude");
-        return Ok(Box::new(ClaudeCliProvider::new(command, model_name)?));
+        return Ok(Box::new(ClaudeCliProvider::new(
+            command, model_name, workspace,
+        )?));
     }
 
     // Determine provider from model name
@@ -131,6 +135,7 @@ pub fn create_provider(model: &str, config: &Config) -> Result<Box<dyn LLMProvid
         Ok(Box::new(ClaudeCliProvider::new(
             &cli_config.command,
             &cli_config.model,
+            workspace,
         )?))
     } else {
         anyhow::bail!("Unknown model or provider not configured: {}", model)
@@ -663,18 +668,89 @@ impl LLMProvider for OllamaProvider {
 pub struct ClaudeCliProvider {
     command: String,
     model: String,
-    /// Session ID for multi-turn conversations (interior mutability for &self methods)
-    session_id: StdMutex<Option<String>>,
+    /// Working directory for CLI execution
+    workspace: std::path::PathBuf,
+    /// Session key for the session store (e.g., "main")
+    session_key: String,
+    /// LocalGPT session ID (for session store tracking)
+    localgpt_session_id: String,
+    /// CLI session ID for multi-turn conversations (interior mutability for &self methods)
+    cli_session_id: StdMutex<Option<String>>,
 }
 
+/// Provider name for CLI session storage
+const CLAUDE_CLI_PROVIDER: &str = "claude-cli";
+
 impl ClaudeCliProvider {
-    pub fn new(command: &str, model: &str) -> Result<Self> {
+    pub fn new(command: &str, model: &str, workspace: std::path::PathBuf) -> Result<Self> {
+        // Load existing CLI session from session store
+        let session_key = "main".to_string();
+        let existing_session = load_cli_session_from_store(&session_key, CLAUDE_CLI_PROVIDER);
+
+        if let Some(ref sid) = existing_session {
+            debug!("Loaded existing Claude CLI session: {}", sid);
+        }
+
         Ok(Self {
             command: command.to_string(),
             model: normalize_claude_model(model),
-            session_id: StdMutex::new(None),
+            workspace,
+            session_key,
+            localgpt_session_id: uuid::Uuid::new_v4().to_string(),
+            cli_session_id: StdMutex::new(existing_session),
         })
     }
+
+    /// Clear the persisted CLI session, starting fresh on next call
+    pub fn clear_session(&self) -> Result<()> {
+        let mut session = self
+            .cli_session_id
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
+        *session = None;
+
+        // Clear from session store
+        clear_cli_session_from_store(&self.session_key, CLAUDE_CLI_PROVIDER)?;
+        debug!("Cleared CLI session for key: {}", self.session_key);
+
+        Ok(())
+    }
+}
+
+/// Load CLI session ID from session store
+fn load_cli_session_from_store(session_key: &str, provider: &str) -> Option<String> {
+    use super::session_store::SessionStore;
+
+    let store = SessionStore::load().ok()?;
+    store.get_cli_session_id(session_key, provider)
+}
+
+/// Save CLI session ID to session store
+fn save_cli_session_to_store(
+    session_key: &str,
+    session_id: &str,
+    provider: &str,
+    cli_session_id: &str,
+) -> Result<()> {
+    use super::session_store::SessionStore;
+
+    let mut store = SessionStore::load()?;
+    store.set_cli_session_id(session_key, session_id, provider, cli_session_id)?;
+    Ok(())
+}
+
+/// Clear CLI session ID from session store
+fn clear_cli_session_from_store(session_key: &str, provider: &str) -> Result<()> {
+    use super::session_store::SessionStore;
+
+    let mut store = SessionStore::load()?;
+    store.update(session_key, "", |entry| {
+        entry.cli_session_ids.remove(provider);
+        if provider == "claude-cli" {
+            entry.claude_cli_session_id = None;
+        }
+    })?;
+    Ok(())
 }
 
 fn normalize_claude_model(model: &str) -> String {
@@ -746,13 +822,13 @@ impl LLMProvider for ClaudeCliProvider {
         let prompt = build_prompt_from_messages(messages);
         let system_prompt = extract_system_prompt(messages);
 
-        // Get current session state
-        let current_session = self
-            .session_id
+        // Get current CLI session state
+        let current_cli_session = self
+            .cli_session_id
             .lock()
             .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?
             .clone();
-        let is_first_turn = current_session.is_none();
+        let is_first_turn = current_cli_session.is_none();
 
         // Build command args
         let mut args = vec![
@@ -776,28 +852,37 @@ impl LLMProvider for ClaudeCliProvider {
             }
         }
 
-        // Session handling
-        if let Some(session_id) = &current_session {
-            // Resume existing session
+        // CLI session handling
+        if let Some(cli_sid) = &current_cli_session {
+            // Resume existing CLI session
             args.push("--resume".to_string());
-            args.push(session_id.clone());
+            args.push(cli_sid.clone());
         } else {
-            // New session - generate UUID
-            let new_session = uuid::Uuid::new_v4().to_string();
+            // New CLI session - generate UUID
+            let new_cli_session = uuid::Uuid::new_v4().to_string();
             args.push("--session-id".to_string());
-            args.push(new_session);
+            args.push(new_cli_session);
         }
 
         // Add prompt as final argument
         args.push(prompt);
 
-        debug!("Claude CLI: {} {:?}", self.command, args);
+        debug!(
+            "Claude CLI: {} {:?} (cwd: {:?})",
+            self.command, args, self.workspace
+        );
 
         // Execute command (blocking - wrap in spawn_blocking for async)
         let output = tokio::task::spawn_blocking({
             let command = self.command.clone();
             let args = args.clone();
-            move || Command::new(&command).args(&args).output()
+            let workspace = self.workspace.clone();
+            move || {
+                Command::new(&command)
+                    .args(&args)
+                    .current_dir(&workspace)
+                    .output()
+            }
         })
         .await??;
 
@@ -810,13 +895,23 @@ impl LLMProvider for ClaudeCliProvider {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let (response, new_session_id) = parse_claude_cli_output(&stdout)?;
 
-        // Update session ID for next turn
-        if let Some(sid) = new_session_id {
-            let mut session = self
-                .session_id
+        // Update CLI session ID for next turn and persist to session store
+        if let Some(ref new_cli_sid) = new_session_id {
+            let mut cli_session = self
+                .cli_session_id
                 .lock()
                 .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
-            *session = Some(sid);
+            *cli_session = Some(new_cli_sid.clone());
+
+            // Persist to session store for cross-restart continuity
+            if let Err(e) = save_cli_session_to_store(
+                &self.session_key,
+                &self.localgpt_session_id,
+                CLAUDE_CLI_PROVIDER,
+                new_cli_sid,
+            ) {
+                debug!("Failed to persist CLI session: {}", e);
+            }
         }
 
         Ok(LLMResponse::Text(response))

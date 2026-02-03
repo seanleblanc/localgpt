@@ -236,11 +236,34 @@ impl Default for Session {
     }
 }
 
+/// Default agent ID (matches OpenClaw's default)
+pub const DEFAULT_AGENT_ID: &str = "main";
+
 fn get_sessions_dir() -> Result<PathBuf> {
+    get_sessions_dir_for_agent(DEFAULT_AGENT_ID)
+}
+
+/// Get sessions directory for a specific agent
+/// Path: ~/.localgpt/agents/<agentId>/sessions/
+pub fn get_sessions_dir_for_agent(agent_id: &str) -> Result<PathBuf> {
     let base = directories::BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
-    Ok(base.home_dir().join(".localgpt").join("sessions"))
+    Ok(base
+        .home_dir()
+        .join(".localgpt")
+        .join("agents")
+        .join(agent_id)
+        .join("sessions"))
+}
+
+/// Get the state directory root
+/// Path: ~/.localgpt/
+pub fn get_state_dir() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+
+    Ok(base.home_dir().join(".localgpt"))
 }
 
 /// Rough token estimation (4 chars per token on average)

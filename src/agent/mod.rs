@@ -1,11 +1,15 @@
 mod providers;
 mod session;
+mod session_store;
 mod tools;
 
 pub use providers::{
     LLMProvider, LLMResponse, Message, Role, StreamChunk, StreamResult, ToolCall, ToolSchema,
 };
-pub use session::{Session, SessionStatus};
+pub use session::{
+    get_sessions_dir_for_agent, get_state_dir, Session, SessionStatus, DEFAULT_AGENT_ID,
+};
+pub use session_store::{SessionEntry, SessionStore};
 pub use tools::{Tool, ToolResult};
 
 use anyhow::Result;

@@ -32,8 +32,9 @@ LocalGPT is a local-only AI assistant with persistent markdown-based memory and 
 ### Core Modules (`src/`)
 
 - **agent/** - LLM interaction layer
-  - `providers.rs` - Trait `LLMProvider` with implementations for OpenAI, Anthropic, and Ollama. Model prefix determines provider (`gpt-*` → OpenAI, `claude-*` → Anthropic, else Ollama)
+  - `providers.rs` - Trait `LLMProvider` with implementations for OpenAI, Anthropic, Ollama, and Claude CLI. Model prefix determines provider (`claude-cli/*` → Claude CLI, `gpt-*` → OpenAI, `claude-*` → Anthropic API, else Ollama)
   - `session.rs` - Conversation state with automatic compaction when approaching context window limits
+  - `session_store.rs` - Session metadata store (`sessions.json`) with CLI session ID persistence
   - `tools.rs` - Agent tools: `bash`, `read_file`, `write_file`, `edit_file`, `memory_search`, `memory_append`, `web_fetch`
 
 - **memory/** - Markdown-based knowledge store
@@ -66,8 +67,72 @@ LocalGPT is a local-only AI assistant with persistent markdown-based memory and 
 Default config path: `~/.localgpt/config.toml` (see `config.example.toml`)
 
 Key settings:
-- `agent.default_model` - Model name (determines provider)
+- `agent.default_model` - Model name (determines provider). Default: `claude-cli/opus`
 - `agent.context_window` / `reserve_tokens` - Context management
 - `heartbeat.interval` - Duration string (e.g., "30m", "1h")
 - `heartbeat.active_hours` - Optional `{start, end}` in "HH:MM" format
 - `server.port` - HTTP server port (default: 18790)
+
+## OpenClaw Compatibility
+
+LocalGPT uses a file structure compatible with OpenClaw for easy migration.
+
+### Directory Structure (matches OpenClaw)
+
+```
+~/.localgpt/                          # State directory (OpenClaw: ~/.openclaw/)
+├── config.toml                       # Config (OpenClaw uses JSON5)
+├── agents/
+│   └── main/                         # Default agent ID
+│       └── sessions/
+│           ├── sessions.json         # Session metadata + CLI session IDs
+│           └── <sessionId>.jsonl     # Session transcripts
+├── workspace/                        # Memory workspace
+│   ├── MEMORY.md                     # Long-term memory
+│   ├── HEARTBEAT.md                  # Pending tasks
+│   ├── SOUL.md                       # Persona/tone (optional)
+│   └── memory/
+│       └── YYYY-MM-DD.md             # Daily logs
+└── logs/
+```
+
+### Migrating from OpenClaw
+
+Best-effort migration from OpenClaw:
+
+```bash
+# Copy OpenClaw data to LocalGPT
+cp -r ~/.openclaw/agents ~/.localgpt/agents
+cp -r ~/.openclaw/workspace ~/.localgpt/workspace
+
+# sessions.json format is compatible
+# CLI session IDs (cliSessionIds, claudeCliSessionId) are preserved
+```
+
+**What works:**
+- `sessions.json` session store (same format)
+- CLI session ID persistence (`cliSessionIds` map)
+- Workspace files: `MEMORY.md`, `HEARTBEAT.md`, `SOUL.md`, `memory/*.md`
+- Session transcripts (`<sessionId>.jsonl`)
+
+**What differs:**
+- Config format: LocalGPT uses TOML, OpenClaw uses JSON5
+- No multi-channel routing (LocalGPT is local-only)
+- No bindings/agents.list (LocalGPT uses single "main" agent)
+- No subagent spawning (yet)
+
+### sessions.json Format
+
+```json
+{
+  "main": {
+    "sessionId": "uuid-here",
+    "updatedAt": 1234567890,
+    "cliSessionIds": {
+      "claude-cli": "cli-session-uuid"
+    },
+    "claudeCliSessionId": "cli-session-uuid",
+    "compactionCount": 0
+  }
+}
+```
