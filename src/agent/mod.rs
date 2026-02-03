@@ -183,6 +183,14 @@ impl Agent {
     async fn build_memory_context(&self) -> Result<String> {
         let mut context = String::new();
 
+        // Load SOUL.md first (persona/tone) - this defines who the agent is
+        if let Ok(soul_content) = self.memory.read_soul_file() {
+            if !soul_content.is_empty() {
+                context.push_str(&soul_content);
+                context.push_str("\n\n---\n\n");
+            }
+        }
+
         // Load MEMORY.md if it exists
         if let Ok(memory_content) = self.memory.read_memory_file() {
             if !memory_content.is_empty() {

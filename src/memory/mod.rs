@@ -87,6 +87,16 @@ impl MemoryManager {
         }
     }
 
+    /// Read the SOUL.md file (persona/tone guidance)
+    pub fn read_soul_file(&self) -> Result<String> {
+        let path = self.workspace.join("SOUL.md");
+        if path.exists() {
+            Ok(fs::read_to_string(&path)?)
+        } else {
+            Ok(String::new())
+        }
+    }
+
     /// Read recent daily log files
     pub fn read_recent_daily_logs(&self, days: usize) -> Result<String> {
         let memory_dir = self.workspace.join("memory");
