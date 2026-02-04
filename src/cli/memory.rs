@@ -42,7 +42,7 @@ pub enum MemoryCommands {
 
 pub async fn run(args: MemoryArgs, agent_id: &str) -> Result<()> {
     let config = Config::load()?;
-    let memory = MemoryManager::new_with_agent(&config.memory, agent_id)?;
+    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), agent_id)?;
 
     match args.command {
         MemoryCommands::Search { query, limit } => search_memory(&memory, &query, limit).await,
@@ -102,6 +102,18 @@ async fn reindex_memory(memory: &MemoryManager, force: bool) -> Result<()> {
     println!("  Files updated: {}", stats.files_updated);
     println!("  Chunks indexed: {}", stats.chunks_indexed);
     println!("  Duration: {:?}", stats.duration);
+
+    // Generate embeddings if provider is configured
+    if memory.has_embeddings() {
+        println!("\nGenerating embeddings...");
+        let (processed, embedded) = memory.generate_embeddings(50).await?;
+        if processed > 0 {
+            println!("  Chunks processed: {}", processed);
+            println!("  Embeddings generated: {}", embedded);
+        } else {
+            println!("  All chunks already have embeddings");
+        }
+    }
 
     Ok(())
 }

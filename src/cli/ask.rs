@@ -21,7 +21,7 @@ pub struct AskArgs {
 
 pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
     let config = Config::load()?;
-    let memory = MemoryManager::new_with_agent(&config.memory, agent_id)?;
+    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), agent_id)?;
 
     let agent_config = AgentConfig {
         model: args.model.unwrap_or(config.agent.default_model.clone()),

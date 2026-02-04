@@ -70,8 +70,16 @@ interval = "30m"
 # Where to store memory files
 workspace = "~/.localgpt/workspace"
 
-# Embedding model for semantic search (future)
-embedding_model = "text-embedding-3-small"
+# Embedding provider for semantic search: "local" (default), "openai", or "none"
+# - "local": Uses FastEmbed (all-MiniLM-L6-v2), no API key needed
+# - "openai": Uses OpenAI embeddings (requires providers.openai config)
+# - "none": FTS-only search, no vector embeddings
+embedding_provider = "local"
+
+# Embedding model (depends on provider):
+# - For "local": all-MiniLM-L6-v2 (default), bge-small-en-v1.5, bge-base-en-v1.5
+# - For "openai": text-embedding-3-small (default), text-embedding-3-large
+embedding_model = "all-MiniLM-L6-v2"
 
 # Chunk size for indexing (tokens)
 chunk_size = 400

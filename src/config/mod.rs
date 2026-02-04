@@ -140,6 +140,10 @@ pub struct MemoryConfig {
     #[serde(default = "default_workspace")]
     pub workspace: String,
 
+    /// Embedding provider: "local" (fastembed, default), "openai", or "none"
+    #[serde(default = "default_embedding_provider")]
+    pub embedding_provider: String,
+
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
 
@@ -230,6 +234,9 @@ fn default_interval() -> String {
 fn default_workspace() -> String {
     "~/.localgpt/workspace".to_string()
 }
+fn default_embedding_provider() -> String {
+    "local".to_string() // Local embeddings via fastembed (no API key needed)
+}
 fn default_embedding_model() -> String {
     "all-MiniLM-L6-v2".to_string() // Local model via fastembed (no API key needed)
 }
@@ -297,6 +304,7 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             workspace: default_workspace(),
+            embedding_provider: default_embedding_provider(),
             embedding_model: default_embedding_model(),
             chunk_size: default_chunk_size(),
             chunk_overlap: default_chunk_overlap(),

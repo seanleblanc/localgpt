@@ -124,7 +124,7 @@ async fn run_daemon_server(config: Config, agent_id: &str) -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
         .init();
 
-    let memory = MemoryManager::new_with_agent(&config.memory, agent_id)?;
+    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), agent_id)?;
     let _watcher = memory.start_watcher()?;
 
     println!("Daemon started successfully");
@@ -268,7 +268,7 @@ async fn start_daemon(foreground: bool, agent_id: &str) -> Result<()> {
     fs::write(&pid_file, std::process::id().to_string())?;
 
     // Initialize components
-    let memory = MemoryManager::new_with_agent(&config.memory, agent_id)?;
+    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), agent_id)?;
     let _watcher = memory.start_watcher()?;
 
     println!("Daemon started successfully");

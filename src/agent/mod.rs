@@ -24,6 +24,7 @@ pub use tools::{Tool, ToolResult};
 
 use anyhow::Result;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::config::Config;
@@ -63,7 +64,7 @@ pub struct Agent {
     app_config: Config,
     provider: Box<dyn LLMProvider>,
     session: Session,
-    memory: MemoryManager,
+    memory: Arc<MemoryManager>,
     tools: Vec<Box<dyn Tool>>,
     /// Cumulative token usage for this session
     cumulative_usage: Usage,
@@ -76,7 +77,10 @@ impl Agent {
         memory: MemoryManager,
     ) -> Result<Self> {
         let provider = providers::create_provider(&config.model, app_config)?;
-        let tools = tools::create_default_tools(app_config)?;
+
+        // Wrap memory in Arc so tools can share it
+        let memory = Arc::new(memory);
+        let tools = tools::create_default_tools(app_config, Some(Arc::clone(&memory)))?;
 
         Ok(Self {
             config,

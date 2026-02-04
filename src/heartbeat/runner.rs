@@ -177,7 +177,11 @@ impl HeartbeatRunner {
         }
 
         // Create agent for heartbeat
-        let memory = MemoryManager::new_with_agent(&self.config.memory, &self.agent_id)?;
+        let memory = MemoryManager::new_with_full_config(
+            &self.config.memory,
+            Some(&self.config),
+            &self.agent_id,
+        )?;
         let agent_config = AgentConfig {
             model: self.config.agent.default_model.clone(),
             context_window: self.config.agent.context_window,

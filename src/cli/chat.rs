@@ -5,14 +5,13 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use serde_json::Value;
 use std::io::{self, Write};
-use std::sync::Arc;
 
 use localgpt::agent::{
     get_last_session_id_for_agent, get_skills_summary, list_sessions_for_agent, load_skills,
     parse_skill_command, search_sessions_for_agent, Agent, AgentConfig, ImageAttachment, Skill,
 };
 use localgpt::config::Config;
-use localgpt::memory::{FastEmbedProvider, MemoryManager};
+use localgpt::memory::MemoryManager;
 
 /// Extract a snippet from content, centered around the query match
 fn extract_snippet(content: &str, query: &str, max_len: usize) -> String {
@@ -121,17 +120,8 @@ pub struct ChatArgs {
 
 pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
     let config = Config::load()?;
-    let mut memory = MemoryManager::new_with_agent(&config.memory, agent_id)?;
-
-    // Set up local embedding provider (default - no API key needed)
-    match FastEmbedProvider::new(None) {
-        Ok(provider) => {
-            memory = memory.with_embedding_provider(Arc::new(provider));
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to create local embedding provider: {}", e);
-        }
-    }
+    // Embedding provider is automatically created based on config.memory.embedding_provider
+    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), agent_id)?;
 
     let agent_config = AgentConfig {
         model: args.model.unwrap_or(config.agent.default_model.clone()),

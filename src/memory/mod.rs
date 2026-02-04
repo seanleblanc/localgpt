@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tracing::{debug, info, warn};
 
-use crate::config::MemoryConfig;
+use crate::config::{Config, MemoryConfig};
 
 #[derive(Clone)]
 pub struct MemoryManager {
@@ -64,7 +64,16 @@ impl MemoryManager {
 
     /// Create a new MemoryManager for a specific agent ID (OpenClaw-compatible)
     pub fn new_with_agent(config: &MemoryConfig, agent_id: &str) -> Result<Self> {
-        let workspace = shellexpand::tilde(&config.workspace).to_string();
+        Self::new_with_full_config(config, None, agent_id)
+    }
+
+    /// Create a new MemoryManager with full config (for OpenAI embedding provider)
+    pub fn new_with_full_config(
+        memory_config: &MemoryConfig,
+        app_config: Option<&Config>,
+        agent_id: &str,
+    ) -> Result<Self> {
+        let workspace = shellexpand::tilde(&memory_config.workspace).to_string();
         let workspace = PathBuf::from(workspace);
 
         // Initialize workspace with templates if needed, returns true if brand new
@@ -79,15 +88,79 @@ impl MemoryManager {
         let db_path = memory_dir.join(format!("{}.sqlite", agent_id));
 
         let index = MemoryIndex::new_with_db_path(&workspace, &db_path)?
-            .with_chunk_config(config.chunk_size, config.chunk_overlap);
+            .with_chunk_config(memory_config.chunk_size, memory_config.chunk_overlap);
+
+        // Create embedding provider based on config
+        let embedding_provider: Option<Arc<dyn EmbeddingProvider>> = match memory_config
+            .embedding_provider
+            .as_str()
+        {
+            "local" => {
+                let model_name = if memory_config.embedding_model.is_empty()
+                    || memory_config.embedding_model == "text-embedding-3-small"
+                {
+                    None // Use default local model
+                } else {
+                    Some(memory_config.embedding_model.as_str())
+                };
+                match FastEmbedProvider::new(model_name) {
+                    Ok(provider) => {
+                        info!("Using local embedding provider: {}", provider.model());
+                        Some(Arc::new(provider))
+                    }
+                    Err(e) => {
+                        warn!("Failed to initialize local embeddings: {}. Falling back to FTS-only search.", e);
+                        None
+                    }
+                }
+            }
+            "openai" => {
+                // Need OpenAI config for API key
+                if let Some(config) = app_config {
+                    if let Some(ref openai) = config.providers.openai {
+                        match OpenAIEmbeddingProvider::new(
+                            &openai.api_key,
+                            &openai.base_url,
+                            &memory_config.embedding_model,
+                        ) {
+                            Ok(provider) => {
+                                info!("Using OpenAI embedding provider: {}", provider.model());
+                                Some(Arc::new(provider))
+                            }
+                            Err(e) => {
+                                warn!("Failed to initialize OpenAI embeddings: {}. Falling back to FTS-only search.", e);
+                                None
+                            }
+                        }
+                    } else {
+                        warn!("OpenAI embedding provider requested but no OpenAI config found. Falling back to FTS-only search.");
+                        None
+                    }
+                } else {
+                    warn!("OpenAI embedding provider requested but no app config provided. Falling back to FTS-only search.");
+                    None
+                }
+            }
+            "none" => {
+                debug!("Embeddings disabled, using FTS-only search");
+                None
+            }
+            other => {
+                warn!(
+                    "Unknown embedding provider '{}'. Falling back to FTS-only search.",
+                    other
+                );
+                None
+            }
+        };
 
         Ok(Self {
             workspace,
             db_path,
             index,
-            config: config.clone(),
-            embedding_provider: None,
-            is_brand_new,
+            config: memory_config.clone(),
+            embedding_provider,
+is_brand_new,
         })
     }
 

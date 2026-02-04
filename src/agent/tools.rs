@@ -3,10 +3,12 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::debug;
 
 use super::providers::ToolSchema;
 use crate::config::Config;
+use crate::memory::MemoryManager;
 
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -21,15 +23,25 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, arguments: &str) -> Result<String>;
 }
 
-pub fn create_default_tools(config: &Config) -> Result<Vec<Box<dyn Tool>>> {
+pub fn create_default_tools(
+    config: &Config,
+    memory: Option<Arc<MemoryManager>>,
+) -> Result<Vec<Box<dyn Tool>>> {
     let workspace = config.workspace_path();
+
+    // Use indexed memory search if MemoryManager is provided, otherwise fallback to grep-based
+    let memory_search_tool: Box<dyn Tool> = if let Some(ref mem) = memory {
+        Box::new(MemorySearchToolWithIndex::new(Arc::clone(mem)))
+    } else {
+        Box::new(MemorySearchTool::new(workspace.clone()))
+    };
 
     Ok(vec![
         Box::new(BashTool::new(config.tools.bash_timeout_ms)),
         Box::new(ReadFileTool::new()),
         Box::new(WriteFileTool::new()),
         Box::new(EditFileTool::new()),
-        Box::new(MemorySearchTool::new(workspace.clone())),
+        memory_search_tool,
         Box::new(MemoryGetTool::new(workspace)),
         Box::new(WebFetchTool::new(config.tools.web_fetch_max_bytes)),
     ])
@@ -446,6 +458,97 @@ impl Tool for MemorySearchTool {
         } else {
             Ok(results.join("\n"))
         }
+    }
+}
+
+// Memory Search Tool with Index - uses MemoryManager for hybrid FTS+vector search
+pub struct MemorySearchToolWithIndex {
+    memory: Arc<MemoryManager>,
+}
+
+impl MemorySearchToolWithIndex {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for MemorySearchToolWithIndex {
+    fn name(&self) -> &str {
+        "memory_search"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let description = if self.memory.has_embeddings() {
+            "Search the memory index using hybrid semantic + keyword search for relevant information"
+        } else {
+            "Search the memory index for relevant information"
+        };
+
+        ToolSchema {
+            name: "memory_search".to_string(),
+            description: description.to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 5)"
+                    }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String> {
+        let args: Value = serde_json::from_str(arguments)?;
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
+        let limit = args["limit"].as_u64().unwrap_or(5) as usize;
+
+        let search_type = if self.memory.has_embeddings() {
+            "hybrid"
+        } else {
+            "FTS"
+        };
+        debug!(
+            "Memory search ({}): {} (limit: {})",
+            search_type, query, limit
+        );
+
+        let results = self.memory.search(query, limit)?;
+
+        if results.is_empty() {
+            return Ok("No results found".to_string());
+        }
+
+        // Format results with relevance scores
+        let formatted: Vec<String> = results
+            .iter()
+            .enumerate()
+            .map(|(i, chunk)| {
+                let preview: String = chunk.content.chars().take(200).collect();
+                let preview = preview.replace('\n', " ");
+                format!(
+                    "{}. {} (lines {}-{}, score: {:.3})\n   {}{}",
+                    i + 1,
+                    chunk.file,
+                    chunk.line_start,
+                    chunk.line_end,
+                    chunk.score,
+                    preview,
+                    if chunk.content.len() > 200 { "..." } else { "" }
+                )
+            })
+            .collect();
+
+        Ok(formatted.join("\n\n"))
     }
 }
 
