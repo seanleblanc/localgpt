@@ -5,6 +5,8 @@ mod watcher;
 mod workspace;
 
 pub use embeddings::{hash_text, EmbeddingProvider, FastEmbedProvider, OpenAIEmbeddingProvider};
+#[cfg(feature = "gguf")]
+pub use embeddings::LlamaCppProvider;
 pub use index::{MemoryIndex, ReindexStats};
 pub use search::MemoryChunk;
 pub use watcher::MemoryWatcher;
@@ -145,6 +147,29 @@ impl MemoryManager {
                     warn!("OpenAI embedding provider requested but no app config provided. Falling back to FTS-only search.");
                     None
                 }
+            }
+            #[cfg(feature = "gguf")]
+            "gguf" => {
+                let cache_dir = if memory_config.embedding_cache_dir.is_empty() {
+                    None
+                } else {
+                    Some(memory_config.embedding_cache_dir.as_str())
+                };
+                match LlamaCppProvider::new(&memory_config.embedding_model, cache_dir) {
+                    Ok(provider) => {
+                        info!("Using GGUF embedding provider: {}", provider.model());
+                        Some(Arc::new(provider))
+                    }
+                    Err(e) => {
+                        warn!("Failed to initialize GGUF embeddings: {}. Falling back to FTS-only search.", e);
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "gguf"))]
+            "gguf" => {
+                warn!("GGUF embedding provider requested but 'gguf' feature is not enabled. Build with --features gguf. Falling back to FTS-only search.");
+                None
             }
             "none" => {
                 debug!("Embeddings disabled, using FTS-only search");

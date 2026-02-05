@@ -1,6 +1,7 @@
 //! Embedding providers for semantic search
 //!
-//! Supports OpenAI embeddings API and optional local embeddings via fastembed.
+//! Supports OpenAI embeddings API, local embeddings via fastembed (ONNX),
+//! and optional GGUF embeddings via llama.cpp (requires `gguf` feature).
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -286,6 +287,195 @@ impl EmbeddingProvider for FastEmbedProvider {
 
         // Normalize all embeddings
         Ok(embeddings.into_iter().map(normalize_embedding).collect())
+    }
+}
+
+// ============================================================================
+// GGUF Embedding Provider (llama.cpp) - Optional, requires `gguf` feature
+// ============================================================================
+
+#[cfg(feature = "gguf")]
+pub struct LlamaCppProvider {
+    model: Arc<StdMutex<llama_cpp_2::model::LlamaModel>>,
+    backend: Arc<llama_cpp_2::llama_backend::LlamaBackend>,
+    model_name: String,
+    dimensions: usize,
+    #[allow(dead_code)] // Reserved for future HuggingFace download support
+    cache_dir: Option<String>,
+}
+
+#[cfg(feature = "gguf")]
+impl LlamaCppProvider {
+    /// Create a new GGUF embedding provider
+    ///
+    /// # Arguments
+    /// * `model_path` - Path to the GGUF model file, or HuggingFace model ID
+    /// * `cache_dir` - Optional directory for caching downloaded models
+    ///
+    /// # Supported models
+    /// - embeddinggemma-300M-Q8_0.gguf (~320MB, 1024 dims)
+    /// - nomic-embed-text-v1.5.Q8_0.gguf (~270MB, 768 dims)
+    /// - mxbai-embed-large-v1-q8_0.gguf (~670MB, 1024 dims)
+    pub fn new(model_path: &str, cache_dir: Option<&str>) -> Result<Self> {
+        use llama_cpp_2::llama_backend::LlamaBackend;
+        use llama_cpp_2::model::params::LlamaModelParams;
+        use llama_cpp_2::model::LlamaModel;
+
+        // Initialize backend
+        let backend = LlamaBackend::init()?;
+
+        // Resolve model path - check if it's a file or needs downloading
+        let resolved_path = Self::resolve_model_path(model_path, cache_dir)?;
+
+        // Extract model name from path
+        let model_name = std::path::Path::new(&resolved_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(model_path)
+            .to_string();
+
+        debug!("Loading GGUF embedding model: {}", model_name);
+
+        // Load model with embedding mode enabled
+        let model_params = LlamaModelParams::default();
+        let model = LlamaModel::load_from_file(&backend, &resolved_path, &model_params)?;
+
+        // Determine dimensions from model (embeddinggemma uses 1024)
+        let dimensions = Self::get_model_dimensions(&model_name);
+
+        Ok(Self {
+            model: Arc::new(StdMutex::new(model)),
+            backend: Arc::new(backend),
+            model_name,
+            dimensions,
+            cache_dir: cache_dir.map(|s| s.to_string()),
+        })
+    }
+
+    /// Resolve model path - download from HuggingFace if needed
+    fn resolve_model_path(model_path: &str, cache_dir: Option<&str>) -> Result<String> {
+        // If it's already a file path, use it directly
+        let path = std::path::Path::new(model_path);
+        if path.exists() {
+            return Ok(model_path.to_string());
+        }
+
+        // Check in cache directory
+        if let Some(cache) = cache_dir {
+            let expanded = shellexpand::tilde(cache).to_string();
+            let cached_path = std::path::Path::new(&expanded).join(model_path);
+            if cached_path.exists() {
+                return Ok(cached_path.to_string_lossy().to_string());
+            }
+        }
+
+        // For now, require the model file to exist
+        // TODO: Add HuggingFace download support like OpenClaw's resolveModelFile
+        anyhow::bail!(
+            "GGUF model file not found: '{}'. \n\
+             Please download the model manually:\n\
+             - embeddinggemma: https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF\n\
+             - nomic-embed: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF",
+            model_path
+        )
+    }
+
+    /// Get embedding dimensions for known models
+    fn get_model_dimensions(model_name: &str) -> usize {
+        let name_lower = model_name.to_lowercase();
+        if name_lower.contains("embeddinggemma") {
+            1024
+        } else if name_lower.contains("nomic-embed") {
+            768
+        } else if name_lower.contains("mxbai-embed-large") {
+            1024
+        } else if name_lower.contains("bge") {
+            768
+        } else {
+            // Default to common dimension
+            768
+        }
+    }
+
+}
+
+#[cfg(feature = "gguf")]
+#[async_trait]
+impl EmbeddingProvider for LlamaCppProvider {
+    fn id(&self) -> &str {
+        "gguf"
+    }
+
+    fn model(&self) -> &str {
+        &self.model_name
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let text = text.to_string();
+        let model = Arc::clone(&self.model);
+        let backend = Arc::clone(&self.backend);
+        let model_name = self.model_name.clone();
+
+        // llama.cpp is synchronous, run in blocking task
+        tokio::task::spawn_blocking(move || {
+            use llama_cpp_2::context::params::LlamaContextParams;
+
+            let model_guard = model
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+
+            // Create context for embedding
+            let ctx_params = LlamaContextParams::default()
+                .with_n_ctx(Some(std::num::NonZeroU32::new(512).unwrap()))
+                .with_embeddings(true);
+
+            let mut ctx = model_guard.new_context(&backend, ctx_params)?;
+
+            // Tokenize the input text
+            let tokens = model_guard.str_to_token(&text, llama_cpp_2::model::AddBos::Always)?;
+
+            // Create a batch with the tokens
+            let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(512, 1);
+            for (i, token) in tokens.iter().enumerate() {
+                batch.add(*token, i as i32, &[0], i == tokens.len() - 1)?;
+            }
+
+            // Decode to generate embeddings
+            ctx.decode(&mut batch)?;
+
+            // Get embeddings from context
+            let embeddings = ctx.embeddings_seq_ith(0)?;
+
+            debug!("Generated GGUF embedding with {} for text len {}", model_name, text.len());
+
+            Ok(normalize_embedding(embeddings.to_vec()))
+        })
+        .await?
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        debug!(
+            "Embedding {} texts with GGUF model {}",
+            texts.len(),
+            self.model_name
+        );
+
+        // Process texts one at a time (llama.cpp batch embedding is complex)
+        let mut results = Vec::with_capacity(texts.len());
+        for text in texts {
+            let embedding = self.embed(text).await?;
+            results.push(embedding);
+        }
+
+        Ok(results)
     }
 }
 
