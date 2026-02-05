@@ -131,6 +131,8 @@ impl Server {
             .route("/api/config", get(get_config))
             .route("/api/heartbeat/status", get(heartbeat_status))
             .route("/api/saved-sessions", get(list_saved_sessions))
+            .route("/api/saved-sessions/{session_id}", get(get_saved_session))
+            .route("/api/logs/daemon", get(get_daemon_logs))
             .layer(cors)
             .with_state(state);
 
@@ -957,6 +959,198 @@ async fn list_saved_sessions(State(_state): State<Arc<AppState>>) -> Response {
         }
         Err(e) => AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+// Get saved session detail - read and parse JSONL session file
+#[derive(Serialize)]
+struct SavedSessionMessage {
+    role: String,
+    content: Option<String>,
+    tool_calls: Option<Vec<serde_json::Value>>,
+    tool_call_id: Option<String>,
+    timestamp: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct SavedSessionDetail {
+    session_id: String,
+    created_at: String,
+    messages: Vec<SavedSessionMessage>,
+}
+
+async fn get_saved_session(Path(session_id): Path<String>) -> Response {
+    use crate::agent::get_sessions_dir_for_agent;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let sessions_dir = match get_sessions_dir_for_agent("main") {
+        Ok(dir) => dir,
+        Err(e) => {
+            return AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    };
+
+    let session_path = sessions_dir.join(format!("{}.jsonl", session_id));
+
+    if !session_path.exists() {
+        return AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response();
+    }
+
+    let file = match File::open(&session_path) {
+        Ok(f) => f,
+        Err(e) => {
+            return AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    };
+
+    let reader = BufReader::new(file);
+    let mut messages = Vec::new();
+    let mut created_at = String::new();
+
+    for (i, line) in reader.lines().enumerate() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let parsed: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // First line is session header
+        if i == 0 && parsed["type"].as_str() == Some("session") {
+            created_at = parsed["timestamp"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            continue;
+        }
+
+        // Parse message entries
+        if parsed["type"].as_str() == Some("message") {
+            if let Some(msg) = parsed.get("message") {
+                let role = msg["role"].as_str().unwrap_or("unknown").to_string();
+
+                // Extract text content
+                let content = if let Some(content_arr) = msg["content"].as_array() {
+                    content_arr
+                        .iter()
+                        .filter_map(|c| {
+                            if c["type"].as_str() == Some("text") {
+                                c["text"].as_str().map(String::from)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else if let Some(text) = msg["content"].as_str() {
+                    text.to_string()
+                } else {
+                    String::new()
+                };
+
+                // Extract tool calls
+                let tool_calls = msg["toolCalls"]
+                    .as_array()
+                    .map(|arr| arr.clone());
+
+                // Extract tool result ID
+                let tool_call_id = msg["toolCallId"]
+                    .as_str()
+                    .map(String::from);
+
+                let timestamp = msg["timestamp"].as_u64();
+
+                messages.push(SavedSessionMessage {
+                    role,
+                    content: if content.is_empty() { None } else { Some(content) },
+                    tool_calls,
+                    tool_call_id,
+                    timestamp,
+                });
+            }
+        }
+    }
+
+    Json(SavedSessionDetail {
+        session_id,
+        created_at,
+        messages,
+    })
+    .into_response()
+}
+
+// Daemon logs endpoint - read log file
+#[derive(Deserialize)]
+struct LogsQuery {
+    lines: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct DaemonLogsResponse {
+    lines: Vec<String>,
+    total_lines: usize,
+    file_size_bytes: u64,
+}
+
+async fn get_daemon_logs(Query(query): Query<LogsQuery>) -> Response {
+    use crate::agent::get_state_dir;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let lines_requested = query.lines.unwrap_or(200).min(1000);
+
+    let state_dir = match get_state_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            return AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    };
+
+    let log_path = state_dir.join("logs").join("daemon.log");
+
+    if !log_path.exists() {
+        return Json(DaemonLogsResponse {
+            lines: vec![],
+            total_lines: 0,
+            file_size_bytes: 0,
+        })
+        .into_response();
+    }
+
+    let metadata = match std::fs::metadata(&log_path) {
+        Ok(m) => m,
+        Err(e) => {
+            return AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    };
+
+    let file = match File::open(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            return AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    };
+
+    let reader = BufReader::new(file);
+    let all_lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+    let total_lines = all_lines.len();
+
+    // Get last N lines
+    let lines: Vec<String> = if total_lines > lines_requested {
+        all_lines[(total_lines - lines_requested)..].to_vec()
+    } else {
+        all_lines
+    };
+
+    Json(DaemonLogsResponse {
+        lines,
+        total_lines,
+        file_size_bytes: metadata.len(),
+    })
+    .into_response()
 }
 
 // WebSocket handler

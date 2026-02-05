@@ -11,6 +11,8 @@
         <header>
             <h1>LocalGPT</h1>
             <div class="header-controls">
+                <button id="sessions-toggle" title="Saved Sessions">Sessions</button>
+                <button id="logs-toggle" title="Daemon Logs">Logs</button>
                 <button id="status-toggle" class="icon-btn" title="Status">
                     <span class="status-dot" id="status-dot"></span>
                 </button>
@@ -56,6 +58,30 @@
                         <span class="status-value" id="heartbeat-detail">-</span>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <div id="logs-panel" class="logs-panel hidden">
+            <div class="logs-header">
+                <span>Daemon Logs</span>
+                <div class="logs-controls">
+                    <button id="logs-refresh">Refresh</button>
+                    <label><input type="checkbox" id="logs-auto"> Auto</label>
+                    <button id="logs-close" class="icon-btn">&times;</button>
+                </div>
+            </div>
+            <pre id="logs-output"></pre>
+        </div>
+
+        <div id="sessions-panel" class="sessions-panel hidden">
+            <div class="sessions-header">
+                <span>Saved Sessions</span>
+                <button id="sessions-close" class="icon-btn">&times;</button>
+            </div>
+            <div id="sessions-list"></div>
+            <div id="session-viewer" class="hidden">
+                <button id="session-back">&larr; Back</button>
+                <div id="session-messages"></div>
             </div>
         </div>
 

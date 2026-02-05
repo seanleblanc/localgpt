@@ -2,6 +2,7 @@ const API = '/api';
 let sessionId = null;
 let isStreaming = false;
 let statusPollInterval = null;
+let logsAutoRefreshInterval = null;
 
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', () => {
@@ -41,6 +42,23 @@ function setupEventListeners() {
     // Status panel toggle
     document.getElementById('status-toggle').onclick = toggleStatusPanel;
     document.getElementById('status-close').onclick = toggleStatusPanel;
+
+    // Logs panel
+    document.getElementById('logs-toggle').onclick = toggleLogsPanel;
+    document.getElementById('logs-close').onclick = toggleLogsPanel;
+    document.getElementById('logs-refresh').onclick = loadDaemonLogs;
+    document.getElementById('logs-auto').onchange = (e) => {
+        if (e.target.checked) {
+            startLogsAutoRefresh();
+        } else {
+            stopLogsAutoRefresh();
+        }
+    };
+
+    // Sessions panel
+    document.getElementById('sessions-toggle').onclick = toggleSessionsPanel;
+    document.getElementById('sessions-close').onclick = toggleSessionsPanel;
+    document.getElementById('session-back').onclick = showSessionsList;
 }
 
 function showEmptyState() {
@@ -361,4 +379,150 @@ function formatAge(seconds) {
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
     return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+// Logs panel functions
+function toggleLogsPanel() {
+    const panel = document.getElementById('logs-panel');
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) {
+        loadDaemonLogs();
+    } else {
+        stopLogsAutoRefresh();
+        document.getElementById('logs-auto').checked = false;
+    }
+}
+
+async function loadDaemonLogs() {
+    try {
+        const res = await fetch(`${API}/logs/daemon?lines=200`);
+        const data = await res.json();
+
+        const output = document.getElementById('logs-output');
+        output.textContent = data.lines.join('\n') || 'No logs available';
+
+        // Auto-scroll to bottom
+        output.scrollTop = output.scrollHeight;
+    } catch (err) {
+        console.error('Failed to load daemon logs:', err);
+        document.getElementById('logs-output').textContent = `Error: ${err.message}`;
+    }
+}
+
+function startLogsAutoRefresh() {
+    if (logsAutoRefreshInterval) return;
+    logsAutoRefreshInterval = setInterval(loadDaemonLogs, 3000);
+}
+
+function stopLogsAutoRefresh() {
+    if (logsAutoRefreshInterval) {
+        clearInterval(logsAutoRefreshInterval);
+        logsAutoRefreshInterval = null;
+    }
+}
+
+// Sessions panel functions
+function toggleSessionsPanel() {
+    const panel = document.getElementById('sessions-panel');
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) {
+        loadSavedSessions();
+    }
+}
+
+async function loadSavedSessions() {
+    try {
+        const res = await fetch(`${API}/saved-sessions`);
+        const data = await res.json();
+
+        const listEl = document.getElementById('sessions-list');
+        const viewerEl = document.getElementById('session-viewer');
+
+        // Show list, hide viewer
+        listEl.style.display = 'block';
+        viewerEl.classList.add('hidden');
+
+        if (!data.sessions || data.sessions.length === 0) {
+            listEl.innerHTML = '<div class="session-item"><em>No saved sessions</em></div>';
+            return;
+        }
+
+        listEl.innerHTML = data.sessions.map(s => `
+            <div class="session-item" onclick="viewSession('${s.id}')">
+                <div class="session-item-id">${s.id.slice(0, 16)}...</div>
+                <div class="session-item-meta">${s.created_at} \u2022 ${s.message_count} messages</div>
+            </div>
+        `).join('');
+    } catch (err) {
+        console.error('Failed to load saved sessions:', err);
+        document.getElementById('sessions-list').innerHTML = `<div class="session-item error">Error: ${err.message}</div>`;
+    }
+}
+
+async function viewSession(sessionId) {
+    try {
+        const res = await fetch(`${API}/saved-sessions/${sessionId}`);
+        const data = await res.json();
+
+        const listEl = document.getElementById('sessions-list');
+        const viewerEl = document.getElementById('session-viewer');
+        const messagesEl = document.getElementById('session-messages');
+
+        // Hide list, show viewer
+        listEl.style.display = 'none';
+        viewerEl.classList.remove('hidden');
+
+        messagesEl.innerHTML = data.messages.map(msg => renderSessionMessage(msg)).join('');
+    } catch (err) {
+        console.error('Failed to view session:', err);
+    }
+}
+
+function renderSessionMessage(msg) {
+    const roleClass = msg.role === 'user' ? 'user' :
+                      msg.role === 'toolResult' ? 'tool' : 'assistant';
+
+    let html = `<div class="message ${roleClass}">`;
+
+    if (msg.content) {
+        html += escapeHtml(msg.content);
+    }
+
+    // Render tool calls
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+        for (const tc of msg.tool_calls) {
+            const args = tc.arguments || '{}';
+            let formattedArgs;
+            try {
+                formattedArgs = JSON.stringify(JSON.parse(args), null, 2);
+            } catch {
+                formattedArgs = args;
+            }
+
+            html += `
+                <div class="tool-call-block" onclick="this.classList.toggle('expanded')">
+                    <div class="tool-call-header">
+                        <span>[${tc.name}]</span>
+                        <span>\u25BC</span>
+                    </div>
+                    <div class="tool-call-body">${escapeHtml(formattedArgs)}</div>
+                </div>
+            `;
+        }
+    }
+
+    // Tool result indicator
+    if (msg.tool_call_id) {
+        html = `<div class="message tool"><span class="tool-name">[result]</span> ${escapeHtml(msg.content || '')}`;
+    }
+
+    html += '</div>';
+    return html;
+}
+
+function showSessionsList() {
+    const listEl = document.getElementById('sessions-list');
+    const viewerEl = document.getElementById('session-viewer');
+    listEl.style.display = 'block';
+    viewerEl.classList.add('hidden');
 }
