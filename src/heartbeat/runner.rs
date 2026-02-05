@@ -21,6 +21,8 @@ pub struct HeartbeatRunner {
     active_hours: Option<(NaiveTime, NaiveTime)>,
     workspace: PathBuf,
     agent_id: String,
+    /// Cached MemoryManager to avoid reinitializing embedding provider on every heartbeat
+    memory: MemoryManager,
 }
 
 impl HeartbeatRunner {
@@ -50,12 +52,16 @@ impl HeartbeatRunner {
 
         let workspace = config.workspace_path();
 
+        // Create MemoryManager once and reuse it to avoid reinitializing embedding provider
+        let memory = MemoryManager::new_with_full_config(&config.memory, Some(config), agent_id)?;
+
         Ok(Self {
             config: config.clone(),
             interval,
             active_hours,
             workspace,
             agent_id: agent_id.to_string(),
+            memory,
         })
     }
 
@@ -176,19 +182,14 @@ impl HeartbeatRunner {
             return Ok((HEARTBEAT_OK_TOKEN.to_string(), HeartbeatStatus::Skipped));
         }
 
-        // Create agent for heartbeat
-        let memory = MemoryManager::new_with_full_config(
-            &self.config.memory,
-            Some(&self.config),
-            &self.agent_id,
-        )?;
+        // Create agent for heartbeat (clone the cached MemoryManager to share the embedding provider)
         let agent_config = AgentConfig {
             model: self.config.agent.default_model.clone(),
             context_window: self.config.agent.context_window,
             reserve_tokens: self.config.agent.reserve_tokens,
         };
 
-        let mut agent = Agent::new(agent_config, &self.config, memory).await?;
+        let mut agent = Agent::new(agent_config, &self.config, self.memory.clone()).await?;
         agent.new_session().await?;
 
         // Check if workspace is a git repo
