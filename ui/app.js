@@ -188,6 +188,11 @@ async function sendMessage() {
     input.style.height = 'auto';
     clearEmptyState();
 
+    // Handle slash commands client-side
+    if (message.startsWith('/')) {
+        if (handleSlashCommand(message)) return;
+    }
+
     appendMessage('user', message);
     const assistantDiv = appendMessage('assistant', '');
     assistantDiv.classList.add('loading');
@@ -260,7 +265,10 @@ function handleEvent(event, assistantDiv) {
             const toolStartDiv = document.createElement('div');
             toolStartDiv.className = 'message tool';
             toolStartDiv.id = `tool-${event.id}`;
-            toolStartDiv.innerHTML = `<span class="tool-name">[${event.name}]</span> Running...`;
+            const toolLabel = event.detail
+                ? `[${event.name}: ${escapeHtml(event.detail)}]`
+                : `[${event.name}]`;
+            toolStartDiv.innerHTML = `<span class="tool-name">${toolLabel}</span> Running...`;
             assistantDiv.after(toolStartDiv);
             scrollToBottom();
             break;
@@ -329,6 +337,81 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Slash command handling
+function handleSlashCommand(input) {
+    const parts = input.split(/\s+/);
+    const cmd = parts[0];
+    const arg = parts.slice(1).join(' ').trim();
+
+    switch (cmd) {
+        case '/new':
+            newSession();
+            return true;
+        case '/help':
+            appendSystemMessage(
+                'Available commands:\n' +
+                '  /new              Start a new session\n' +
+                '  /model            Show current model\n' +
+                '  /compact          Compact session history\n' +
+                '  /sessions         Toggle sessions panel\n' +
+                '  /status           Toggle status panel\n' +
+                '  /logs             Toggle logs panel\n' +
+                '  /clear            Clear chat display\n' +
+                '  /help             Show this help text'
+            );
+            return true;
+        case '/sessions':
+            toggleSessionsPanel();
+            return true;
+        case '/status':
+            toggleStatusPanel();
+            return true;
+        case '/logs':
+            toggleLogsPanel();
+            return true;
+        case '/model':
+            loadStatus().then(() => {
+                const model = document.getElementById('status-model').textContent;
+                appendSystemMessage(`Current model: ${model}`);
+            });
+            return true;
+        case '/clear':
+            clearMessages();
+            showEmptyState();
+            return true;
+        case '/compact':
+            if (!sessionId) {
+                appendSystemMessage('No active session to compact.');
+                return true;
+            }
+            fetch(`${API}/sessions/${sessionId}/compact`, { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        appendSystemMessage(`Compact failed: ${data.error}`);
+                    } else {
+                        appendSystemMessage(
+                            `Session compacted: ${data.token_count_before || '?'} -> ${data.token_count_after || '?'} tokens`
+                        );
+                    }
+                })
+                .catch(err => appendSystemMessage(`Compact failed: ${err.message}`));
+            return true;
+        default:
+            appendSystemMessage(`Unknown command: ${cmd}. Type /help for available commands.`);
+            return true;
+    }
+}
+
+function appendSystemMessage(text) {
+    const div = document.createElement('div');
+    div.className = 'message system';
+    div.style.whiteSpace = 'pre-wrap';
+    div.textContent = text;
+    document.getElementById('messages').appendChild(div);
+    scrollToBottom();
 }
 
 // Status panel functions

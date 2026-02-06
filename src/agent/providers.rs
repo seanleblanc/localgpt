@@ -125,7 +125,11 @@ pub enum StreamEvent {
     /// Text content chunk
     Content(String),
     /// Tool call started
-    ToolCallStart { name: String, id: String },
+    ToolCallStart {
+        name: String,
+        id: String,
+        arguments: String,
+    },
     /// Tool call completed
     ToolCallEnd {
         name: String,

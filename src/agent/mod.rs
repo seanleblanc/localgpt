@@ -26,7 +26,7 @@ pub use system_prompt::{
     build_heartbeat_prompt, is_heartbeat_ok, is_silent_reply, HEARTBEAT_OK_TOKEN,
     SILENT_REPLY_TOKEN,
 };
-pub use tools::{Tool, ToolResult};
+pub use tools::{extract_tool_detail, Tool, ToolResult};
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -960,6 +960,7 @@ impl Agent {
                             yield Ok(StreamEvent::ToolCallStart {
                                 name: call.name.clone(),
                                 id: call.id.clone(),
+                                arguments: call.arguments.clone(),
                             });
 
                             // Execute tool

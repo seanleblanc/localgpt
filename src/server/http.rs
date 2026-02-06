@@ -30,7 +30,7 @@ use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info};
 
-use crate::agent::{Agent, AgentConfig, StreamEvent};
+use crate::agent::{extract_tool_detail, Agent, AgentConfig, StreamEvent};
 use crate::concurrency::{TurnGate, WorkspaceLock};
 use crate::config::Config;
 use crate::heartbeat::{get_last_heartbeat_event, HeartbeatStatus};
@@ -776,8 +776,9 @@ async fn chat_stream(
                             let data = json!({"type": "content", "delta": content});
                             yield Ok(Event::default().data(data.to_string()));
                         }
-                        Ok(StreamEvent::ToolCallStart { name, id }) => {
-                            let data = json!({"type": "tool_start", "name": name, "id": id});
+                        Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
+                            let detail = extract_tool_detail(&name, &arguments);
+                            let data = json!({"type": "tool_start", "name": name, "id": id, "detail": detail});
                             yield Ok(Event::default().data(data.to_string()));
                         }
                         Ok(StreamEvent::ToolCallEnd { name, id, output }) => {

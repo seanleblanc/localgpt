@@ -46,7 +46,11 @@ impl ChatView {
                     ui.horizontal(|ui| match &tool.status {
                         ToolStatus::Running => {
                             ui.spinner();
-                            ui.label(format!("Running: {}", tool.name));
+                            if let Some(ref detail) = tool.detail {
+                                ui.label(format!("Running: {}: {}", tool.name, detail));
+                            } else {
+                                ui.label(format!("Running: {}", tool.name));
+                            }
                         }
                         ToolStatus::Completed(preview) => {
                             ui.label(RichText::new("Done").color(Color32::from_rgb(46, 204, 113)));
@@ -108,7 +112,7 @@ impl ChatView {
             let input_response = ui.add_sized(
                 [ui.available_width() - 70.0, 35.0],
                 TextEdit::singleline(&mut state.input)
-                    .hint_text("Type a message...")
+                    .hint_text("Type a message or /help for commands...")
                     .frame(true),
             );
 
@@ -123,10 +127,15 @@ impl ChatView {
 
             if (send_clicked || enter_pressed) && can_send {
                 let content = state.input.trim().to_string();
-                state.add_user_message(content.clone());
                 state.input.clear();
-                state.is_loading = true;
-                message_to_send = Some(UiMessage::Chat(content));
+
+                if let Some(cmd) = Self::parse_slash_command(&content, state) {
+                    message_to_send = Some(cmd);
+                } else {
+                    state.add_user_message(content.clone());
+                    state.is_loading = true;
+                    message_to_send = Some(UiMessage::Chat(content));
+                }
             }
         });
 
@@ -139,6 +148,82 @@ impl ChatView {
         }
 
         message_to_send
+    }
+
+    /// Parse a slash command from user input.
+    /// Returns `Some(UiMessage)` if a command was recognized, `None` if it should be sent as chat.
+    fn parse_slash_command(input: &str, state: &mut UiState) -> Option<UiMessage> {
+        if !input.starts_with('/') {
+            return None;
+        }
+
+        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+        let cmd = parts[0];
+        let arg = parts.get(1).map(|s| s.trim()).unwrap_or("");
+
+        match cmd {
+            "/new" => Some(UiMessage::NewSession),
+            "/model" => {
+                if arg.is_empty() {
+                    // Show current model
+                    state.messages.push(ChatMessage {
+                        role: MessageRole::System,
+                        content: format!("Current model: {}", state.model),
+                        tool_info: None,
+                    });
+                    state.scroll_to_bottom = true;
+                    None // No message to send to worker
+                } else {
+                    Some(UiMessage::SetModel(arg.to_string()))
+                }
+            }
+            "/compact" => Some(UiMessage::Compact),
+            "/memory" => {
+                if arg.is_empty() {
+                    state.messages.push(ChatMessage {
+                        role: MessageRole::System,
+                        content: "Usage: /memory <query>".to_string(),
+                        tool_info: None,
+                    });
+                    state.scroll_to_bottom = true;
+                    None
+                } else {
+                    Some(UiMessage::SearchMemory(arg.to_string()))
+                }
+            }
+            "/save" => Some(UiMessage::Save),
+            "/help" => Some(UiMessage::ShowHelp),
+            "/status" => Some(UiMessage::ShowStatus),
+            "/resume" => {
+                if arg.is_empty() {
+                    state.messages.push(ChatMessage {
+                        role: MessageRole::System,
+                        content: "Usage: /resume <session-id>".to_string(),
+                        tool_info: None,
+                    });
+                    state.scroll_to_bottom = true;
+                    None
+                } else {
+                    Some(UiMessage::ResumeSession(arg.to_string()))
+                }
+            }
+            "/sessions" => {
+                state.active_panel = Panel::Sessions;
+                Some(UiMessage::RefreshSessions)
+            }
+            _ => {
+                state.messages.push(ChatMessage {
+                    role: MessageRole::System,
+                    content: format!(
+                        "Unknown command: {}. Type /help for available commands.",
+                        cmd
+                    ),
+                    tool_info: None,
+                });
+                state.scroll_to_bottom = true;
+                None
+            }
+        }
     }
 
     fn render_message(ui: &mut Ui, msg: &ChatMessage) {

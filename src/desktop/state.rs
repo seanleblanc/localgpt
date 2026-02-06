@@ -19,6 +19,18 @@ pub enum UiMessage {
     RefreshSessions,
     /// Request status update
     RefreshStatus,
+    /// Set model
+    SetModel(String),
+    /// Compact current session
+    Compact,
+    /// Search memory
+    SearchMemory(String),
+    /// Save session to disk
+    Save,
+    /// Show help text
+    ShowHelp,
+    /// Show status info
+    ShowStatus,
 }
 
 /// Message from worker to UI
@@ -33,7 +45,11 @@ pub enum WorkerMessage {
     /// Streaming content chunk
     ContentChunk(String),
     /// Tool call started
-    ToolCallStart { name: String, id: String },
+    ToolCallStart {
+        name: String,
+        id: String,
+        detail: Option<String>,
+    },
     /// Tool call completed
     ToolCallEnd {
         name: String,
@@ -52,6 +68,8 @@ pub enum WorkerMessage {
     Sessions(Vec<SessionInfo>),
     /// Session created/resumed
     SessionChanged { id: String, message_count: usize },
+    /// System message for display (command output, help text, etc.)
+    SystemMessage(String),
 }
 
 /// A chat message for display
@@ -73,6 +91,7 @@ pub enum MessageRole {
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
     pub name: String,
+    pub detail: Option<String>,
     pub status: ToolStatus,
 }
 
@@ -149,9 +168,14 @@ impl UiState {
                 self.streaming_content.push_str(&content);
                 self.scroll_to_bottom = true;
             }
-            WorkerMessage::ToolCallStart { name, id: _ } => {
+            WorkerMessage::ToolCallStart {
+                name,
+                id: _,
+                detail,
+            } => {
                 self.active_tools.push(ToolInfo {
                     name,
+                    detail,
                     status: ToolStatus::Running,
                 });
             }
@@ -208,6 +232,14 @@ impl UiState {
                 // Clear chat on session change
                 self.messages.clear();
                 self.streaming_content.clear();
+            }
+            WorkerMessage::SystemMessage(text) => {
+                self.messages.push(ChatMessage {
+                    role: MessageRole::System,
+                    content: text,
+                    tool_info: None,
+                });
+                self.scroll_to_bottom = true;
             }
         }
     }

@@ -11,7 +11,8 @@ use anyhow::Result;
 use futures::StreamExt;
 
 use crate::agent::{
-    list_sessions_for_agent, Agent, AgentConfig, StreamEvent, ToolCall, DEFAULT_AGENT_ID,
+    extract_tool_detail, list_sessions_for_agent, Agent, AgentConfig, StreamEvent, ToolCall,
+    DEFAULT_AGENT_ID,
 };
 use crate::config::Config;
 use crate::memory::MemoryManager;
@@ -123,7 +124,11 @@ async fn worker_loop(
                                     StreamEvent::Content(text) => {
                                         let _ = tx.send(WorkerMessage::ContentChunk(text));
                                     }
-                                    StreamEvent::ToolCallStart { name, id } => {
+                                    StreamEvent::ToolCallStart {
+                                        name,
+                                        id,
+                                        arguments,
+                                    } => {
                                         // Check if this tool requires approval
                                         if approval_tools.contains(&name) {
                                             // Collect for approval
@@ -133,8 +138,12 @@ async fn worker_loop(
                                                 arguments: String::new(),
                                             });
                                         } else {
-                                            let _ =
-                                                tx.send(WorkerMessage::ToolCallStart { name, id });
+                                            let detail = extract_tool_detail(&name, &arguments);
+                                            let _ = tx.send(WorkerMessage::ToolCallStart {
+                                                name,
+                                                id,
+                                                detail,
+                                            });
                                         }
                                     }
                                     StreamEvent::ToolCallEnd { name, id, output } => {
@@ -209,6 +218,112 @@ async fn worker_loop(
             }
             UiMessage::RefreshStatus => {
                 let _ = tx.send(WorkerMessage::Status(agent.session_status()));
+            }
+            UiMessage::SetModel(name) => match agent.set_model(&name) {
+                Ok(()) => {
+                    let _ = tx.send(WorkerMessage::SystemMessage(format!(
+                        "Model set to: {}",
+                        agent.model()
+                    )));
+                }
+                Err(e) => {
+                    let _ = tx.send(WorkerMessage::SystemMessage(format!(
+                        "Failed to set model: {}",
+                        e
+                    )));
+                }
+            },
+            UiMessage::Compact => match agent.compact_session().await {
+                Ok((before, after)) => {
+                    let _ = tx.send(WorkerMessage::SystemMessage(format!(
+                        "Session compacted: {} -> {} tokens",
+                        before, after
+                    )));
+                    let _ = tx.send(WorkerMessage::Status(agent.session_status()));
+                }
+                Err(e) => {
+                    let _ = tx.send(WorkerMessage::SystemMessage(format!(
+                        "Compact failed: {}",
+                        e
+                    )));
+                }
+            },
+            UiMessage::SearchMemory(query) => match agent.search_memory(&query).await {
+                Ok(results) => {
+                    if results.is_empty() {
+                        let _ = tx.send(WorkerMessage::SystemMessage(
+                            "No memory results found.".to_string(),
+                        ));
+                    } else {
+                        let text = results
+                            .iter()
+                            .enumerate()
+                            .map(|(i, chunk)| {
+                                let preview: String = chunk.content.chars().take(150).collect();
+                                let preview = preview.replace('\n', " ");
+                                format!(
+                                    "{}. {} (lines {}-{}, score: {:.3})\n   {}",
+                                    i + 1,
+                                    chunk.file,
+                                    chunk.line_start,
+                                    chunk.line_end,
+                                    chunk.score,
+                                    preview,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+                        let _ = tx.send(WorkerMessage::SystemMessage(format!(
+                            "Memory search results for \"{}\":\n{}",
+                            query, text
+                        )));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(WorkerMessage::SystemMessage(format!(
+                        "Memory search failed: {}",
+                        e
+                    )));
+                }
+            },
+            UiMessage::Save => match agent.save_session().await {
+                Ok(path) => {
+                    let _ = tx.send(WorkerMessage::SystemMessage(format!(
+                        "Session saved to: {}",
+                        path.display()
+                    )));
+                }
+                Err(e) => {
+                    let _ = tx.send(WorkerMessage::SystemMessage(format!("Save failed: {}", e)));
+                }
+            },
+            UiMessage::ShowHelp => {
+                let help_text = "\
+Available commands:
+  /new              Start a new session
+  /model [name]     Show or set the current model
+  /compact          Compact session history
+  /memory <query>   Search memory files
+  /save             Save current session to disk
+  /status           Show session status
+  /sessions         Show saved sessions
+  /resume <id>      Resume a session by ID
+  /help             Show this help text";
+                let _ = tx.send(WorkerMessage::SystemMessage(help_text.to_string()));
+            }
+            UiMessage::ShowStatus => {
+                let status = agent.session_status();
+                let text = format!(
+                    "Session: {}\nMessages: {}\nTokens: {} context / {} API in / {} API out\nCompactions: {}",
+                    &status.id[..8.min(status.id.len())],
+                    status.message_count,
+                    status.token_count,
+                    status.api_input_tokens,
+                    status.api_output_tokens,
+                    status.compaction_count,
+                );
+                let _ = tx.send(WorkerMessage::SystemMessage(text));
+                let _ = tx.send(WorkerMessage::Status(status));
             }
         }
 
