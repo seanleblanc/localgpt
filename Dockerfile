@@ -25,7 +25,7 @@ RUN cargo build --release
 FROM debian:buster-slim
 
 # Copy the binary from the builder
-COPY --from=builder /usr/src/myapp/target/release/myapp /usr/local/bin/myapp
+COPY --from=builder /usr/src/myapp/target/release/localgpt /usr/local/bin/localgpt
 
 # Set the entry point for the container
 CMD ["myapp"]
