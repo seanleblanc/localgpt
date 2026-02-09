@@ -33,13 +33,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
 
-      - name: Build Docker image
+      # - name: Build Docker image
+      #   uses: docker/build-push-action@v3
+      #   with:
+      #     context: .
+      #     file: Dockerfile
+      #     push: false
+
+      - name: Build Docker image with caching
+        id: docker_build
         uses: docker/build-push-action@v3
         with:
           context: .
           file: Dockerfile
+          cache-from: type=local,src=./.buildx-cache
+          cache-to: type=local,dest=./.buildx-cache
           push: false
+
+
 
       # - name: Run Docker container
       #   run: |
       #     docker run --rm myapp
+
+
