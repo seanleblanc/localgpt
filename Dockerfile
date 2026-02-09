@@ -1,5 +1,5 @@
 # Use the official Rust image as the base
-FROM rust:1.70 as builder
+FROM rust:1.93 as builder
 
 # Set the working directory
 WORKDIR /usr/src/myapp
