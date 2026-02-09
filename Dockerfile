@@ -9,12 +9,14 @@ COPY Cargo.toml Cargo.lock ./
 
 # Build dependencies only
 RUN mkdir src && \
+    mkdir ui && \
     echo "fn main() {}" > src/main.rs && \
     cargo build --release && \
     rm -f target/release/deps/myapp*
 
 # Now copy the source code and build the actual application
 COPY ./src ./src
+COPY ./ui ./ui
 
 # Build the actual application
 RUN cargo build --release
