@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use log::debug;
+use tracing::debug;
 
 
 mod cli;
