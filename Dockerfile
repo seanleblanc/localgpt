@@ -27,7 +27,6 @@ COPY . .
 RUN cargo build --release --bin localgpt
 
 # Final stage: runtime
-FROM debian:buster-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/cc-debian as runtime
 COPY --from=builder /app/target/release/localgpt /usr/local/bin/localgpt
 ENTRYPOINT ["/usr/local/bin/localgpt"]
