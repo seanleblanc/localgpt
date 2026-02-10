@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-
+use log::debug;
 
 
 mod cli;
@@ -8,6 +8,7 @@ mod cli;
 use cli::{Cli, Commands};
 
 fn main() -> Result<()> {
+    debug!("main() begin");
     let cli = Cli::parse();
 
     // Handle daemon start/restart specially - must fork BEFORE starting Tokio runtime
