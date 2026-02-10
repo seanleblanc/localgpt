@@ -1,5 +1,6 @@
 # Stage 0: build planner (cache build plan)
-FROM rust:1.93-slim AS chef
+#FROM rust:1.93-slim AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.93 AS chef
 WORKDIR /app
 
 
