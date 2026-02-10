@@ -1,31 +1,33 @@
-# Use the official Rust image as the base
-FROM rust:1.93 as builder
-
-# Set the working directory
-WORKDIR /usr/src/myapp
-
-# Copy only the Cargo.toml and Cargo.lock to cache dependencies
+# Stage 0: build planner (cache build plan)
+FROM rust:1.93-slim as chef-planner
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
+# copy minimal src to let cargo-chef analyze deps
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo install cargo-chef --version 0.1.42 --locked
 
-# Build dependencies only
-RUN mkdir src && \
-    mkdir ui && \
-    echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -f target/release/deps/myapp*
+# produce recipe
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Now copy the source code and build the actual application
-COPY ./src ./src
-COPY ./ui ./ui
+# Stage 1: build dependencies
+FROM rust:1.93-slim as chef-cook
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates build-essential pkg-config libssl-dev git && rm -rf /var/lib/apt/lists/*
+COPY --from=chef-planner /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
+COPY Cargo.toml Cargo.lock recipe.json ./
+RUN cargo chef cook --release --recipe-path recipe.json
 
-# Build the actual application
-RUN cargo build --release
+# Stage 2: compile application
+FROM rust:1.93-slim as builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates build-essential pkg-config libssl-dev git && rm -rf /var/lib/apt/lists/*
+COPY --from=chef-cook /app/target target
+COPY . .
+RUN cargo build --release --bin localgpt
 
-# Final base image (alpine is preferred for smaller size)
+# Final stage: runtime
 FROM debian:buster-slim
-
-# Copy the binary from the builder
-COPY --from=builder /usr/src/myapp/target/release/localgpt /usr/local/bin/localgpt
-
-# Set the entry point for the container
-CMD ["myapp"]
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/localgpt /usr/local/bin/localgpt
+ENTRYPOINT ["/usr/local/bin/localgpt"]
