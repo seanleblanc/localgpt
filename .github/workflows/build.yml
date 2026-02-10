@@ -27,7 +27,7 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          cache-from: type=local,src=./.buildx-cache
-          cache-to: type=local,dest=./.buildx-cache,mode=max
+          cache-from: type=gha,src=./.buildx-cache
+          cache-to: type=gha,dest=./.buildx-cache,mode=max
           push: false
 
