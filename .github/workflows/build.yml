@@ -28,11 +28,6 @@ jobs:
           context: .
           file: Dockerfile
           cache-from: type=local,src=./.buildx-cache
-          cache-to: type=local,dest=./.buildx-cache
+          cache-to: type=local,dest=./.buildx-cache,mode=max
           push: false
 
-      - name: List Cargo Directory
-        run: ls -la ~/.cargo/
-
-      - name: List Target Directory
-        run: ls -la target || echo "Target directory does not exist."
