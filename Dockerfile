@@ -15,7 +15,7 @@ FROM rust:1.93-slim as chef-cook
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates build-essential pkg-config libssl-dev git && rm -rf /var/lib/apt/lists/*
 COPY --from=chef-planner /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
-COPY --from=chef-planner /app/Cargo.toml /app/Cargo.lock recipe.json ./
+COPY --from=chef-planner /app/Cargo.toml /app/Cargo.lock /app/recipe.json ./
 RUN cargo chef cook --release --recipe-path recipe.json
 
 # Stage 2: compile application
