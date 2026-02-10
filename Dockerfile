@@ -21,5 +21,5 @@ RUN cargo build --release --bin localgpt
 
 # Final stage: runtime
 FROM gcr.io/distroless/cc-debian13 AS runtime
-COPY --from=builder /app/target/release/localgpt /usr/local/bin/localgpt
+COPY --from=chef-cook /app/target/release/localgpt /usr/local/bin/localgpt
 ENTRYPOINT ["/usr/local/bin/localgpt"]
